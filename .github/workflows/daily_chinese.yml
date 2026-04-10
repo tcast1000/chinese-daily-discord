@@ -1,0 +1,44 @@
+name: Chinese Daily Lesson
+
+on:
+  schedule:
+    # Fire at BOTH PDT and PST UTC offsets for each target time.
+    # The Python script auto-detects Pacific time and only sends
+    # if the hour matches (11 AM, 3 PM, or 6 PM). The other 3
+    # triggers exit silently. DST is handled automatically.
+    #
+    #               PDT (summer, UTC-7)    PST (winter, UTC-8)
+    # 11 AM PT  →   18:00 UTC              19:00 UTC
+    #  3 PM PT  →   22:00 UTC              23:00 UTC
+    #  6 PM PT  →   01:00 UTC              02:00 UTC
+    #
+    - cron: '0 18 * * *'
+    - cron: '0 19 * * *'
+    - cron: '0 22 * * *'
+    - cron: '0 23 * * *'
+    - cron: '0 1 * * *'
+    - cron: '0 2 * * *'
+
+  # Manual trigger — set SLOT to override auto-detection
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: 'Slot override (0=11AM, 1=3PM, 2=6PM). Leave blank for auto.'
+        required: false
+        default: ''
+
+jobs:
+  send-lesson:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Send Chinese lesson
+        env:
+          GMAIL_USER:         ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          SMS_EMAIL:          ${{ secrets.SMS_EMAIL }}
+          SLOT:               ${{ github.event.inputs.slot }}
+        run: python send_lesson.py

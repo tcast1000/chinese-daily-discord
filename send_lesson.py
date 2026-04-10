@@ -5,34 +5,56 @@ Sends one Chinese character lesson per text, 3 times per day.
 Schedule:
   Monday–Saturday: 3 new characters/day (slots 0, 1, 2)
   Sunday:          3 review characters (one per slot)
-  Cycle:           200 characters covered in ~11 weeks, then repeats
+  Cycle:           600 characters covered in ~33 weeks, then repeats
+
+Timezone handling:
+  The GitHub Actions workflow fires at 6 UTC times (covering both PDT and PST).
+  This script detects the current Pacific time and only sends if it matches
+  one of the target hours (11 AM, 3 PM, 6 PM). Otherwise it exits silently.
+  This means DST changes are handled automatically — no manual cron edits needed.
 
 Required environment variables:
   GMAIL_USER         - your Gmail address
   GMAIL_APP_PASSWORD - Gmail App Password (not your regular password)
   SMS_EMAIL          - carrier email-to-SMS address (e.g. 4087866039@vtext.com)
-  SLOT               - which message of the day: 0 (11 AM), 1 (3 PM), 2 (6 PM)
+  SLOT               - (optional) override: 0, 1, or 2. If omitted, auto-detected.
 """
 
 import os
 import sys
 import smtplib
 from email.mime.text import MIMEText
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from characters import CHARACTERS
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 START_DATE = date(2026, 4, 10)   # First day of lessons
+TIMEZONE   = "America/Los_Angeles"
 
-CHARS_PER_DAY  = 3   # texts per day
-NEW_DAYS_PER_WEEK = 6  # Monday–Saturday get new characters
+CHARS_PER_DAY     = 3   # texts per day
+NEW_DAYS_PER_WEEK = 6   # Monday–Saturday get new characters
 # Sunday (day_of_week == 6) is always review
+
+# Target hours in Pacific time → slot mapping
+SLOT_HOURS = {11: 0, 15: 1, 18: 2}   # 11 AM → 0, 3 PM → 1, 6 PM → 2
 
 GMAIL_USER         = os.environ.get("GMAIL_USER", "").strip()
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
 SMS_EMAIL          = os.environ.get("SMS_EMAIL", "").strip()
+
+
+# ── Slot detection ────────────────────────────────────────────────────────────
+
+def detect_slot():
+    """
+    Auto-detect the slot from the current Pacific time.
+    Returns the slot (0/1/2) if the current hour matches a target, or None.
+    """
+    now_pt = datetime.now(ZoneInfo(TIMEZONE))
+    return SLOT_HOURS.get(now_pt.hour)
 
 
 # ── Character selection ────────────────────────────────────────────────────────
@@ -40,12 +62,6 @@ SMS_EMAIL          = os.environ.get("SMS_EMAIL", "").strip()
 def get_todays_character(slot: int):
     """
     Return (char_dict, is_review) for the given slot (0/1/2) based on today's date.
-
-    New-character days (Mon–Sat):
-      char index = week_num * 18 + day_of_week * 3 + slot
-
-    Review day (Sun):
-      picks a deterministic character from an earlier week
     """
     today    = date.today()
     day_num  = (today - START_DATE).days
@@ -54,7 +70,7 @@ def get_todays_character(slot: int):
         print(f"Lessons start on {START_DATE}. Nothing to send today.")
         return None, False
 
-    total        = len(CHARACTERS)          # 200
+    total        = len(CHARACTERS)
     week_num     = day_num // 7
     day_of_week  = day_num % 7              # 0–5 = new, 6 = review
 
@@ -66,7 +82,6 @@ def get_todays_character(slot: int):
         if covered == 0:
             char_idx = slot % total
         else:
-            # Skip the most recent week; pick deterministically from earlier
             review_pool = max(CHARS_PER_DAY, covered - chars_per_week)
             char_idx = (week_num * 11 + slot * 17) % review_pool
         return CHARACTERS[char_idx % total], True
@@ -134,14 +149,24 @@ def send_sms(message: str):
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
-    # Validate config
-    missing = [v for v in ["GMAIL_USER", "GMAIL_APP_PASSWORD", "SMS_EMAIL", "SLOT"]
+    # Validate credentials
+    missing = [v for v in ["GMAIL_USER", "GMAIL_APP_PASSWORD", "SMS_EMAIL"]
                if not os.environ.get(v)]
     if missing:
         print(f"ERROR: Missing environment variables: {', '.join(missing)}")
         sys.exit(1)
 
-    slot = int(os.environ["SLOT"])
+    # Determine slot: explicit SLOT env var takes priority, otherwise auto-detect
+    slot_env = os.environ.get("SLOT", "").strip()
+    if slot_env:
+        slot = int(slot_env)
+    else:
+        slot = detect_slot()
+        if slot is None:
+            now_pt = datetime.now(ZoneInfo(TIMEZONE))
+            print(f"Not a lesson hour. Current Pacific time: {now_pt.strftime('%I:%M %p %Z')}. Skipping.")
+            sys.exit(0)
+
     if slot not in (0, 1, 2):
         print("ERROR: SLOT must be 0, 1, or 2")
         sys.exit(1)
