@@ -1,0 +1,23 @@
+name: Chinese Lesson — 11 AM
+
+on:
+  schedule:
+    - cron: '0 18 * * *'   # 11 AM PDT (UTC-7) | 11 AM PST becomes 19:00 UTC in winter
+  workflow_dispatch:        # manual trigger for testing
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Send morning lesson
+        working-directory: chinese_daily
+        env:
+          GMAIL_USER:         ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          SMS_EMAIL:          ${{ secrets.SMS_EMAIL }}
+          SLOT:               '0'
+        run: python send_lesson.py
