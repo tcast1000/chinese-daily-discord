@@ -14,7 +14,6 @@ jobs:
         with:
           python-version: '3.12'
       - name: Send afternoon lesson
-        working-directory: chinese_daily
         env:
           GMAIL_USER:         ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
