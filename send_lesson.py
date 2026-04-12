@@ -8,16 +8,16 @@ Schedule:
   Cycle:           600 characters covered in ~33 weeks, then repeats
 
 Timezone handling:
-  The GitHub Actions workflow fires at 6 UTC times (covering both PDT and PST).
-  This script detects the current Pacific time and only sends if it matches
-  one of the target hours (11 AM, 3 PM, 6 PM). Otherwise it exits silently.
-  This means DST changes are handled automatically — no manual cron edits needed.
+  The GitHub Actions workflow fires at 6 UTC times (covering both PDT and PST)
+  and passes the SLOT explicitly. The script checks whether the current Pacific
+  UTC offset matches the cron trigger to avoid sending duplicates at DST boundaries.
 
 Required environment variables:
   GMAIL_USER         - your Gmail address
   GMAIL_APP_PASSWORD - Gmail App Password (not your regular password)
   SMS_EMAIL          - carrier email-to-SMS address (e.g. 4087866039@vtext.com)
-  SLOT               - (optional) override: 0, 1, or 2. If omitted, auto-detected.
+  SLOT               - 0, 1, or 2 (set by the workflow)
+  EXPECT_PDT         - (optional) "1" for PDT cron, "0" for PST cron, for DST dedup
 """
 
 import os
@@ -38,23 +38,29 @@ CHARS_PER_DAY     = 3   # texts per day
 NEW_DAYS_PER_WEEK = 6   # Monday–Saturday get new characters
 # Sunday (day_of_week == 6) is always review
 
-# Target hours in Pacific time → slot mapping
-SLOT_HOURS = {11: 0, 15: 1, 18: 2}   # 11 AM → 0, 3 PM → 1, 6 PM → 2
-
 GMAIL_USER         = os.environ.get("GMAIL_USER", "").strip()
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
 SMS_EMAIL          = os.environ.get("SMS_EMAIL", "").strip()
 
 
-# ── Slot detection ────────────────────────────────────────────────────────────
+# ── DST dedup ────────────────────────────────────────────────────────────────
 
-def detect_slot():
+def is_correct_dst_trigger() -> bool:
     """
-    Auto-detect the slot from the current Pacific time.
-    Returns the slot (0/1/2) if the current hour matches a target, or None.
+    Each slot fires twice per day (once at the PDT UTC offset, once at PST).
+    The workflow passes EXPECT_PDT=1 for PDT crons, EXPECT_PDT=0 for PST crons.
+    Compare against the current Pacific UTC offset to skip the wrong trigger.
+    For workflow_dispatch (EXPECT_PDT is empty), always send.
     """
+    expect_pdt = os.environ.get("EXPECT_PDT", "").strip()
+    if not expect_pdt:
+        return True  # manual trigger, always send
+
     now_pt = datetime.now(ZoneInfo(TIMEZONE))
-    return SLOT_HOURS.get(now_pt.hour)
+    utc_offset_hours = now_pt.utcoffset().total_seconds() / 3600
+    currently_pdt = (utc_offset_hours == -7)  # PDT = UTC-7, PST = UTC-8
+
+    return currently_pdt == (expect_pdt == "1")
 
 
 # ── Character selection ────────────────────────────────────────────────────────
@@ -156,16 +162,18 @@ def main():
         print(f"ERROR: Missing environment variables: {', '.join(missing)}")
         sys.exit(1)
 
-    # Determine slot: explicit SLOT env var takes priority, otherwise auto-detect
+    # Determine slot
     slot_env = os.environ.get("SLOT", "").strip()
-    if slot_env:
-        slot = int(slot_env)
-    else:
-        slot = detect_slot()
-        if slot is None:
-            now_pt = datetime.now(ZoneInfo(TIMEZONE))
-            print(f"Not a lesson hour. Current Pacific time: {now_pt.strftime('%I:%M %p %Z')}. Skipping.")
-            sys.exit(0)
+    if not slot_env:
+        print("ERROR: SLOT environment variable is required (0, 1, or 2)")
+        sys.exit(1)
+    slot = int(slot_env)
+
+    # DST dedup: both PDT and PST crons fire; skip the wrong one
+    if not is_correct_dst_trigger():
+        now_pt = datetime.now(ZoneInfo(TIMEZONE))
+        print(f"DST dedup: wrong offset trigger. Current: {now_pt.strftime('%Z')}. Skipping.")
+        sys.exit(0)
 
     if slot not in (0, 1, 2):
         print("ERROR: SLOT must be 0, 1, or 2")

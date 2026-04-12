@@ -3,21 +3,22 @@ name: Chinese Daily Lesson
 on:
   schedule:
     # Fire at BOTH PDT and PST UTC offsets for each target time.
-    # The Python script auto-detects Pacific time and only sends
-    # if the hour matches (11 AM, 3 PM, or 6 PM). The other 3
-    # triggers exit silently. DST is handled automatically.
+    # The Python script checks whether it's currently PDT or PST
+    # and skips the wrong-offset trigger automatically.
+    # SLOT is passed explicitly so GitHub Actions cron delays
+    # don't cause the script to miss the target hour.
     #
     #               PDT (summer, UTC-7)    PST (winter, UTC-8)
-    # 11 AM PT  →   18:00 UTC              19:00 UTC
-    #  3 PM PT  →   22:00 UTC              23:00 UTC
-    #  6 PM PT  →   01:00 UTC              02:00 UTC
+    # 11 AM PT  →   18:00 UTC              19:00 UTC       → SLOT 0
+    #  3 PM PT  →   22:00 UTC              23:00 UTC       → SLOT 1
+    #  6 PM PT  →   01:00 UTC (+1d)        02:00 UTC (+1d) → SLOT 2
     #
-    - cron: '0 18 * * *'
-    - cron: '0 19 * * *'
-    - cron: '0 22 * * *'
-    - cron: '0 23 * * *'
-    - cron: '0 1 * * *'
-    - cron: '0 2 * * *'
+    - cron: '0 18 * * *'   # 11 AM PDT
+    - cron: '0 19 * * *'   # 11 AM PST
+    - cron: '0 22 * * *'   #  3 PM PDT
+    - cron: '0 23 * * *'   #  3 PM PST
+    - cron: '0 1 * * *'    #  6 PM PDT
+    - cron: '0 2 * * *'    #  6 PM PST
 
   # Manual trigger — set SLOT to override auto-detection
   workflow_dispatch:
@@ -35,10 +36,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Determine slot from cron schedule
+        id: slot
+        run: |
+          # For workflow_dispatch, use the user-provided slot
+          if [ -n "${{ github.event.inputs.slot }}" ]; then
+            echo "value=${{ github.event.inputs.slot }}" >> "$GITHUB_OUTPUT"
+            echo "is_pdt=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # For schedule triggers, map the cron expression to a slot.
+          # github.event.schedule holds the cron that fired this run.
+          CRON="${{ github.event.schedule }}"
+          case "$CRON" in
+            "0 18 * * *") echo "value=0" >> "$GITHUB_OUTPUT"; echo "is_pdt=1" >> "$GITHUB_OUTPUT" ;;
+            "0 19 * * *") echo "value=0" >> "$GITHUB_OUTPUT"; echo "is_pdt=0" >> "$GITHUB_OUTPUT" ;;
+            "0 22 * * *") echo "value=1" >> "$GITHUB_OUTPUT"; echo "is_pdt=1" >> "$GITHUB_OUTPUT" ;;
+            "0 23 * * *") echo "value=1" >> "$GITHUB_OUTPUT"; echo "is_pdt=0" >> "$GITHUB_OUTPUT" ;;
+            "0 1 * * *")  echo "value=2" >> "$GITHUB_OUTPUT"; echo "is_pdt=1" >> "$GITHUB_OUTPUT" ;;
+            "0 2 * * *")  echo "value=2" >> "$GITHUB_OUTPUT"; echo "is_pdt=0" >> "$GITHUB_OUTPUT" ;;
+            *) echo "Unknown cron: $CRON"; exit 1 ;;
+          esac
       - name: Send Chinese lesson
         env:
           GMAIL_USER:         ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           SMS_EMAIL:          ${{ secrets.SMS_EMAIL }}
-          SLOT:               ${{ github.event.inputs.slot }}
+          SLOT:               ${{ steps.slot.outputs.value }}
+          EXPECT_PDT:         ${{ steps.slot.outputs.is_pdt }}
         run: python send_lesson.py
