@@ -1,6 +1,6 @@
 """
-Chinese Daily Lesson Sender
-Sends one Chinese character lesson per text, 3 times per day.
+Chinese Daily Lesson — Discord DM Bot
+Sends one Chinese character lesson as a Discord DM, 3 times per day.
 
 Schedule:
   Monday–Saturday: 3 new characters/day (slots 0, 1, 2)
@@ -13,19 +13,19 @@ Timezone handling:
   UTC offset matches the cron trigger to avoid sending duplicates at DST boundaries.
 
 Required environment variables:
-  GMAIL_USER         - your Gmail address
-  GMAIL_APP_PASSWORD - Gmail App Password (not your regular password)
-  SMS_EMAIL          - carrier email-to-SMS address (e.g. 4087866039@vtext.com)
+  DISCORD_TOKEN      - your Discord bot token
+  DISCORD_DM_USER_ID - Discord user ID to DM
   SLOT               - 0, 1, or 2 (set by the workflow)
   EXPECT_PDT         - (optional) "1" for PDT cron, "0" for PST cron, for DST dedup
 """
 
+import asyncio
 import os
 import sys
-import smtplib
-from email.mime.text import MIMEText
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
+
+import discord
 
 from characters import CHARACTERS
 
@@ -34,13 +34,12 @@ from characters import CHARACTERS
 START_DATE = date(2026, 4, 10)   # First day of lessons
 TIMEZONE   = "America/Los_Angeles"
 
-CHARS_PER_DAY     = 3   # texts per day
+CHARS_PER_DAY     = 3   # DMs per day
 NEW_DAYS_PER_WEEK = 6   # Monday–Saturday get new characters
 # Sunday (day_of_week == 6) is always review
 
-GMAIL_USER         = os.environ.get("GMAIL_USER", "").strip()
-GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "").strip()
-SMS_EMAIL          = os.environ.get("SMS_EMAIL", "").strip()
+DISCORD_TOKEN      = os.environ.get("DISCORD_TOKEN", "").strip()
+DISCORD_DM_USER_ID = os.environ.get("DISCORD_DM_USER_ID", "").strip()
 
 
 # ── DST dedup ────────────────────────────────────────────────────────────────
@@ -97,7 +96,7 @@ def get_todays_character(slot: int):
         return CHARACTERS[char_idx], False
 
 
-# ── Message formatting ─────────────────────────────────────────────────────────
+# ── Embed formatting ─────────────────────────────────────────────────────────
 
 SLOT_LABEL = {0: "Morning", 1: "Afternoon", 2: "Evening"}
 TONE_MARK  = {
@@ -108,56 +107,77 @@ TONE_MARK  = {
     5: "(neutral)",
 }
 
-def format_message(char_data: dict, slot: int, is_review: bool = False) -> str:
+# Colors per slot for visual distinction
+SLOT_COLOR = {0: 0xE74C3C, 1: 0xF39C12, 2: 0x3498DB}  # red, orange, blue
+
+
+def build_embed(char_data: dict, slot: int, is_review: bool = False) -> discord.Embed:
     tone_desc  = TONE_MARK.get(char_data["tone"], "")
     time_label = SLOT_LABEL.get(slot, "")
-    prefix     = "[REVIEW] " if is_review else ""
+    prefix     = "\U0001f504 REVIEW — " if is_review else ""
     week_label = f"Week {char_data['week']}: {char_data['group']}"
 
-    lines = [
-        f"{prefix}Chinese Daily — {time_label}",
-        f"Char:    {char_data['char']}",
-        f"Pinyin:  {char_data['pinyin']}  Tone {char_data['tone']} {tone_desc}",
-        f"Meaning: {char_data['meaning']}",
-        f"",
-        f"Example:",
-        f"  {char_data['example_cn']}",
-        f"  {char_data['example_pinyin']}",
-        f"  \"{char_data['example_en']}\"",
-        f"",
-        f"[{week_label}]",
-    ]
-    return "\n".join(lines)
+    embed = discord.Embed(
+        title=f"{prefix}Chinese Daily — {time_label}",
+        color=SLOT_COLOR.get(slot, 0x5865F2),
+    )
+
+    embed.add_field(
+        name="Character",
+        value=f"# {char_data['char']}",
+        inline=False,
+    )
+    embed.add_field(name="Pinyin", value=char_data["pinyin"], inline=True)
+    embed.add_field(
+        name="Tone",
+        value=f"{char_data['tone']} {tone_desc}",
+        inline=True,
+    )
+    embed.add_field(name="Meaning", value=char_data["meaning"], inline=False)
+
+    example = (
+        f"**{char_data['example_cn']}**\n"
+        f"{char_data['example_pinyin']}\n"
+        f"*\"{char_data['example_en']}\"*"
+    )
+    embed.add_field(name="Example", value=example, inline=False)
+
+    embed.set_footer(text=week_label)
+
+    return embed
 
 
 # ── Sending ────────────────────────────────────────────────────────────────────
 
-def send_sms(message: str):
-    msg = MIMEText(message, "plain", "utf-8")
-    msg["From"]    = GMAIL_USER
-    msg["To"]      = SMS_EMAIL
-    msg["Subject"] = ""
+async def send_discord_dm(embed: discord.Embed):
+    intents = discord.Intents.default()
+    client = discord.Client(intents=intents)
 
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-            server.sendmail(GMAIL_USER, SMS_EMAIL, msg.as_string())
-        print(f"Lesson sent to {SMS_EMAIL}")
-    except smtplib.SMTPAuthenticationError:
-        print("ERROR: Gmail authentication failed.")
-        print("Make sure GMAIL_APP_PASSWORD is a Gmail App Password, not your regular password.")
-        sys.exit(1)
-    except Exception as e:
-        print(f"ERROR sending message: {e}")
-        sys.exit(1)
+    @client.event
+    async def on_ready():
+        try:
+            user = await client.fetch_user(int(DISCORD_DM_USER_ID))
+            await user.send(embed=embed)
+            print(f"DM sent to user {DISCORD_DM_USER_ID}")
+        except discord.Forbidden:
+            print("ERROR: Bot cannot DM this user. Make sure DMs are enabled.")
+            await client.close()
+            sys.exit(1)
+        except Exception as e:
+            print(f"ERROR sending DM: {e}")
+            await client.close()
+            sys.exit(1)
+        await client.close()
+
+    await client.start(DISCORD_TOKEN)
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
     # Validate credentials
-    missing = [v for v in ["GMAIL_USER", "GMAIL_APP_PASSWORD", "SMS_EMAIL"]
-               if not os.environ.get(v)]
+    missing = [v for v in ["DISCORD_TOKEN", "DISCORD_DM_USER_ID"]
+               if not os.environ.get(v, "").strip()]
     if missing:
         print(f"ERROR: Missing environment variables: {', '.join(missing)}")
         sys.exit(1)
@@ -183,16 +203,16 @@ def main():
     if char_data is None:
         return
 
-    message = format_message(char_data, slot, is_review)
+    embed = build_embed(char_data, slot, is_review)
 
-    # Print to console (safe for any terminal encoding)
+    # Print summary to console
     safe = lambda s: s.encode(sys.stdout.encoding or "utf-8", errors="replace") \
                       .decode(sys.stdout.encoding or "utf-8", errors="replace")
     print("=" * 42)
-    print(safe(message))
+    print(safe(f"{char_data['char']} — {char_data['pinyin']} — {char_data['meaning']}"))
     print("=" * 42)
 
-    send_sms(message)
+    asyncio.run(send_discord_dm(embed))
 
 
 if __name__ == "__main__":

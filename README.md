@@ -1,134 +1,78 @@
-# Chinese Daily — Free SMS Chinese Lessons
+# Chinese Daily — Discord DM Lessons
 
-Sends one Chinese character lesson per day to your phone via text message — completely free.
+Sends Chinese character lessons as Discord DMs 3 times a day — completely free via GitHub Actions.
 
-**What you get each day:**
-- The character (汉字)
+**What you get each DM:**
+- The character (汉字) displayed large
 - Pinyin + tone description
 - English meaning
 - An example sentence (Chinese, pinyin, English)
 - Theme label (grouped by topic across weeks)
 
-**Schedule:**
-- Monday–Saturday: 1 new character per day
-- Sunday: review of an earlier character
-- 200 characters across 33 themed weeks, then the cycle repeats
+**Schedule (Pacific Time):**
+- 11 AM, 3 PM, 6 PM — one character per DM
+- Monday–Saturday: 3 new characters per day
+- Sunday: 3 review characters
+- 600 characters across ~33 themed weeks, then the cycle repeats
 
 ---
 
-## Setup (GitHub Actions — Runs in the Cloud, No Computer Needed)
+## Setup (GitHub Actions)
 
-### Step 1: Create a Gmail App Password
+### Step 1: Create a Discord Bot
 
-1. Enable 2-Factor Authentication on your Google account:
-   https://myaccount.google.com/security
+1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
+2. Click **New Application**, name it (e.g. "Chinese Daily")
+3. Go to the **Bot** tab → click **Reset Token** → copy the token
+4. Under **Privileged Gateway Intents**, no special intents are needed
+5. Go to **OAuth2 → URL Generator**:
+   - Select scope: **bot**
+   - Select permission: **Send Messages**
+6. Open the generated URL to invite the bot to any server you're in
 
-2. Generate an App Password:
-   https://myaccount.google.com/apppasswords
-   - Choose any name (e.g. "Chinese Daily")
-   - Copy the 16-character code it gives you
+### Step 2: Get Your Discord User ID
 
-### Step 2: Find Your Carrier's SMS Email Gateway
-
-Replace `10digitnumber` with your actual phone number (no dashes):
-
-| Carrier     | Email address                            |
-|-------------|------------------------------------------|
-| AT&T        | 10digitnumber@txt.att.net                |
-| T-Mobile    | 10digitnumber@tmomail.net                |
-| Verizon     | 10digitnumber@vtext.com                  |
-| Sprint      | 10digitnumber@messaging.sprintpcs.com    |
-| Cricket     | 10digitnumber@mms.cricketwireless.net    |
-| Boost       | 10digitnumber@sms.myboostmobile.com      |
-| Metro PCS   | 10digitnumber@mymetropcs.com             |
-| US Cellular | 10digitnumber@email.uscc.net             |
+1. Open Discord → **Settings → Advanced** → enable **Developer Mode**
+2. Right-click your username anywhere → **Copy User ID**
 
 ### Step 3: Push This Folder to GitHub
 
-1. Create a new **private** repository on GitHub (github.com → New repository)
-2. Push this `chinese_daily` folder (or the whole `Automation` folder) to it
+1. Create a new **private** repository on GitHub
+2. Push this folder to it
 
 ### Step 4: Add GitHub Secrets
 
 In your GitHub repository, go to:
 **Settings → Secrets and variables → Actions → New repository secret**
 
-Add these three secrets:
+Add these two secrets:
 
-| Secret name        | Value                                     |
-|--------------------|-------------------------------------------|
-| `GMAIL_USER`       | your Gmail address (e.g. you@gmail.com)   |
-| `GMAIL_APP_PASSWORD` | the 16-char App Password from Step 1   |
-| `SMS_EMAIL`        | your carrier SMS email from Step 2        |
+| Secret name          | Value                              |
+|----------------------|------------------------------------|
+| `DISCORD_TOKEN`      | Bot token from Step 1              |
+| `DISCORD_DM_USER_ID` | Your user ID from Step 2          |
 
-### Step 5: Adjust the Send Time (Optional)
+### Step 5: Test It
 
-Edit `.github/workflows/daily_chinese.yml` and change the cron line:
+Go to your GitHub repo → **Actions** tab → **Chinese Daily Lesson** → **Run workflow**
 
-```yaml
-- cron: '0 14 * * *'   # 14:00 UTC = 9 AM Eastern
-```
-
-Common conversions (for 9 AM your time):
-- 9 AM Eastern:  `0 14 * * *`
-- 9 AM Central:  `0 15 * * *`
-- 9 AM Mountain: `0 16 * * *`
-- 9 AM Pacific:  `0 17 * * *`
-
-### Step 6: Test It
-
-Go to your GitHub repo → **Actions** tab → **Daily Chinese Lesson** → **Run workflow**
-
-You should receive a text message within a minute!
+You should receive a Discord DM within a minute!
 
 ---
 
-## Alternative: Run Locally with Windows Task Scheduler
+## Adjusting the Schedule
 
-If you prefer to run it on your own computer instead of GitHub:
+Edit `.github/workflows/daily_chinese.yml` to change send times. The cron times
+are in UTC and fire at both PDT and PST offsets (the script auto-skips the wrong one).
 
-### 1. Set up environment variables (one-time)
+## Customizing the Start Date
 
-Open PowerShell as Administrator and run:
-```powershell
-[Environment]::SetEnvironmentVariable("GMAIL_USER", "you@gmail.com", "User")
-[Environment]::SetEnvironmentVariable("GMAIL_APP_PASSWORD", "your16charpassword", "User")
-[Environment]::SetEnvironmentVariable("SMS_EMAIL", "5551234567@tmomail.net", "User")
+Edit `send_lesson.py` and change this line:
+```python
+START_DATE = date(2026, 4, 10)
 ```
-
-### 2. Create the scheduled task
-
-Open PowerShell and run (adjust paths as needed):
-```powershell
-$action = New-ScheduledTaskAction -Execute "python" `
-  -Argument "C:\Users\tcast\OneDrive\Desktop\Vibe Coding\Automation\chinese_daily\send_lesson.py" `
-  -WorkingDirectory "C:\Users\tcast\OneDrive\Desktop\Vibe Coding\Automation\chinese_daily"
-
-$trigger = New-ScheduledTaskTrigger -Daily -At "9:00AM"
-
-Register-ScheduledTask -TaskName "Chinese Daily Lesson" `
-  -Action $action -Trigger $trigger -RunLevel Highest
-```
-
-> Note: Your computer must be on and connected at 9 AM for this to run.
-
----
 
 ## Keeping GitHub Actions Active
 
 GitHub disables scheduled workflows after **60 days of repository inactivity**.
-To prevent this, either:
-- Make a small commit every couple of months, OR
-- Go to the Actions tab and manually click "Run workflow" occasionally
-
----
-
-## Customizing the Start Date
-
-Edit `send_lesson.py` and change this line to your preferred start date:
-```python
-START_DATE = date(2026, 4, 11)
-```
-
-The system automatically figures out which character to send based on
-how many days have passed since the start date — no database needed.
+The `keepalive.yml` workflow bumps a file monthly to prevent this.
