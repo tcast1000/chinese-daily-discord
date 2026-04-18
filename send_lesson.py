@@ -296,6 +296,15 @@ def main():
     if char_data is None:
         return
 
+    override = os.environ.get("CHAR_OVERRIDE", "").strip()
+    if override:
+        match = next((c for c in CHARACTERS if c["char"] == override), None)
+        if match is None:
+            print(f"ERROR: CHAR_OVERRIDE {override!r} not in CHARACTERS")
+            sys.exit(1)
+        char_data, is_review = match, False
+        print(f"CHAR_OVERRIDE active: sending {override}")
+
     stroke_png = render_stroke_order_png(char_data["char"])
     embed = build_embed(char_data, slot, is_review,
                         has_stroke_image=stroke_png is not None)

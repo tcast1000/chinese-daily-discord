@@ -27,6 +27,10 @@ on:
         description: 'Slot override (0=11AM, 1=3PM, 2=6PM). Leave blank for auto.'
         required: false
         default: ''
+      character:
+        description: 'Send this specific character instead of the scheduled one (single hanzi).'
+        required: false
+        default: ''
 
 jobs:
   send-lesson:
@@ -65,4 +69,5 @@ jobs:
           DISCORD_DM_USER_ID: ${{ secrets.DISCORD_DM_USER_ID }}
           SLOT:               ${{ steps.slot.outputs.value }}
           EXPECT_PDT:         ${{ steps.slot.outputs.is_pdt }}
+          CHAR_OVERRIDE:      ${{ github.event.inputs.character }}
         run: python send_lesson.py
