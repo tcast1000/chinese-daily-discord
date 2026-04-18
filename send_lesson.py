@@ -31,7 +31,9 @@ import discord
 
 from characters import CHARACTERS
 
-STROKE_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stroke_data")
+_HERE            = os.path.dirname(os.path.abspath(__file__))
+STROKE_DATA_DIR  = os.path.join(_HERE, "stroke_data")
+AUDIO_DIR        = os.path.join(_HERE, "audio")
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -175,6 +177,15 @@ def render_stroke_order_png(char: str) -> bytes | None:
     return bytes(png) if png else None
 
 
+def load_pronunciation_mp3(char: str) -> bytes | None:
+    """Return pre-generated MP3 bytes for the character, or None if missing."""
+    path = os.path.join(AUDIO_DIR, f"{char}.mp3")
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return None
+    with open(path, "rb") as f:
+        return f.read()
+
+
 # ── Embed formatting ─────────────────────────────────────────────────────────
 
 SLOT_LABEL = {0: "Morning", 1: "Afternoon", 2: "Evening"}
@@ -191,6 +202,7 @@ SLOT_COLOR = {0: 0xE74C3C, 1: 0xF39C12, 2: 0x3498DB}  # red, orange, blue
 
 
 STROKE_ATTACHMENT_NAME = "stroke_order.png"
+AUDIO_ATTACHMENT_NAME  = "pronunciation.mp3"
 
 
 def build_embed(char_data: dict, slot: int, is_review: bool = False,
@@ -235,7 +247,9 @@ def build_embed(char_data: dict, slot: int, is_review: bool = False,
 
 # ── Sending ────────────────────────────────────────────────────────────────────
 
-async def send_discord_dm(embed: discord.Embed, stroke_png: bytes | None = None):
+async def send_discord_dm(embed: discord.Embed,
+                          stroke_png: bytes | None = None,
+                          audio_mp3: bytes | None = None):
     intents = discord.Intents.default()
     client = discord.Client(intents=intents)
 
@@ -243,13 +257,18 @@ async def send_discord_dm(embed: discord.Embed, stroke_png: bytes | None = None)
     async def on_ready():
         try:
             user = await client.fetch_user(int(DISCORD_DM_USER_ID))
-            kwargs = {"embed": embed}
+            files = []
             if stroke_png:
-                kwargs["file"] = discord.File(
+                files.append(discord.File(
                     io.BytesIO(stroke_png),
                     filename=STROKE_ATTACHMENT_NAME,
-                )
-            await user.send(**kwargs)
+                ))
+            if audio_mp3:
+                files.append(discord.File(
+                    io.BytesIO(audio_mp3),
+                    filename=AUDIO_ATTACHMENT_NAME,
+                ))
+            await user.send(embed=embed, files=files) if files else await user.send(embed=embed)
             print(f"DM sent to user {DISCORD_DM_USER_ID}")
         except discord.Forbidden:
             print("ERROR: Bot cannot DM this user. Make sure DMs are enabled.")
@@ -305,6 +324,7 @@ def main():
         print(f"CHAR_OVERRIDE active: sending {override}")
 
     stroke_png = render_stroke_order_png(char_data["char"])
+    audio_mp3  = load_pronunciation_mp3(char_data["char"])
     embed = build_embed(char_data, slot, is_review,
                         has_stroke_image=stroke_png is not None)
 
@@ -314,9 +334,10 @@ def main():
     print("=" * 42)
     print(safe(f"{char_data['char']} — {char_data['pinyin']} — {char_data['meaning']}"))
     print(f"stroke image: {'yes (' + str(len(stroke_png)) + ' bytes)' if stroke_png else 'no'}")
+    print(f"audio:        {'yes (' + str(len(audio_mp3)) + ' bytes)' if audio_mp3 else 'no'}")
     print("=" * 42)
 
-    asyncio.run(send_discord_dm(embed, stroke_png))
+    asyncio.run(send_discord_dm(embed, stroke_png, audio_mp3))
 
 
 if __name__ == "__main__":
