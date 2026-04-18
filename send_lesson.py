@@ -226,7 +226,6 @@ def build_embed(char_data: dict, slot: int, is_review: bool = False,
     embed.add_field(name="Example", value=example, inline=False)
 
     if has_stroke_image:
-        embed.add_field(name="Stroke Order", value="\u200b", inline=False)
         embed.set_image(url=f"attachment://{STROKE_ATTACHMENT_NAME}")
 
     embed.set_footer(text=week_label)
