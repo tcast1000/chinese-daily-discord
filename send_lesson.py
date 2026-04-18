@@ -20,6 +20,8 @@ Required environment variables:
 """
 
 import asyncio
+import io
+import json
 import os
 import sys
 from datetime import date, datetime
@@ -28,6 +30,8 @@ from zoneinfo import ZoneInfo
 import discord
 
 from characters import CHARACTERS
+
+STROKE_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stroke_data")
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -96,6 +100,81 @@ def get_todays_character(slot: int):
         return CHARACTERS[char_idx], False
 
 
+# ── Stroke order rendering ────────────────────────────────────────────────────
+
+# hanzi-writer-data uses a 1024x1024 Cartesian (Y-up) coordinate space.
+# Standard SVG render transform flips Y and offsets to the 0-900 character band.
+_HANZI_INNER_TRANSFORM = "translate(0, 900) scale(1, -1)"
+_PANEL_PX     = 160
+_MAX_PER_ROW  = 10
+_PNG_SCALE    = 2   # 2x for retina crispness
+
+
+def render_stroke_order_png(char: str) -> bytes | None:
+    """Render a progressive stroke-order diagram (1 panel per stroke) as PNG bytes.
+    Returns None if the character has no stroke data file."""
+    path = os.path.join(STROKE_DATA_DIR, f"{char}.json")
+    if not os.path.exists(path):
+        return None
+
+    try:
+        import resvg_py
+    except ImportError:
+        print("WARN: resvg_py not installed; skipping stroke order image.")
+        return None
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    strokes = data.get("strokes") or []
+    n = len(strokes)
+    if n == 0:
+        return None
+
+    cols = min(n, _MAX_PER_ROW)
+    rows = (n + _MAX_PER_ROW - 1) // _MAX_PER_ROW
+    w = cols * _PANEL_PX
+    h = rows * _PANEL_PX
+    inner_scale = _PANEL_PX / 1024.0
+
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" '
+        f'width="{w}" height="{h}">',
+        f'<rect width="{w}" height="{h}" fill="white"/>',
+    ]
+    for i in range(n):
+        row = i // _MAX_PER_ROW
+        col = i % _MAX_PER_ROW
+        x0  = col * _PANEL_PX
+        y0  = row * _PANEL_PX
+        parts.append(
+            f'<rect x="{x0 + 0.5}" y="{y0 + 0.5}" '
+            f'width="{_PANEL_PX - 1}" height="{_PANEL_PX - 1}" '
+            f'fill="none" stroke="#e5e5e5"/>'
+        )
+        parts.append(
+            f'<g transform="translate({x0},{y0}) scale({inner_scale}) '
+            f'{_HANZI_INNER_TRANSFORM}">'
+        )
+        for j in range(i + 1):
+            color = "#d32f2f" if j == i else "#c8c8c8"
+            parts.append(f'<path d="{strokes[j]}" fill="{color}"/>')
+        parts.append('</g>')
+        parts.append(
+            f'<text x="{x0 + 6}" y="{y0 + 16}" font-family="Helvetica" '
+            f'font-size="12" fill="#888">{i + 1}</text>'
+        )
+    parts.append('</svg>')
+    svg = "".join(parts)
+
+    png = resvg_py.svg_to_bytes(
+        svg_string=svg,
+        width=w * _PNG_SCALE,
+        height=h * _PNG_SCALE,
+    )
+    return bytes(png) if png else None
+
+
 # ── Embed formatting ─────────────────────────────────────────────────────────
 
 SLOT_LABEL = {0: "Morning", 1: "Afternoon", 2: "Evening"}
@@ -111,7 +190,11 @@ TONE_MARK  = {
 SLOT_COLOR = {0: 0xE74C3C, 1: 0xF39C12, 2: 0x3498DB}  # red, orange, blue
 
 
-def build_embed(char_data: dict, slot: int, is_review: bool = False) -> discord.Embed:
+STROKE_ATTACHMENT_NAME = "stroke_order.png"
+
+
+def build_embed(char_data: dict, slot: int, is_review: bool = False,
+                has_stroke_image: bool = False) -> discord.Embed:
     tone_desc  = TONE_MARK.get(char_data["tone"], "")
     time_label = SLOT_LABEL.get(slot, "")
     prefix     = "\U0001f504 REVIEW — " if is_review else ""
@@ -142,6 +225,10 @@ def build_embed(char_data: dict, slot: int, is_review: bool = False) -> discord.
     )
     embed.add_field(name="Example", value=example, inline=False)
 
+    if has_stroke_image:
+        embed.add_field(name="Stroke Order", value="\u200b", inline=False)
+        embed.set_image(url=f"attachment://{STROKE_ATTACHMENT_NAME}")
+
     embed.set_footer(text=week_label)
 
     return embed
@@ -149,7 +236,7 @@ def build_embed(char_data: dict, slot: int, is_review: bool = False) -> discord.
 
 # ── Sending ────────────────────────────────────────────────────────────────────
 
-async def send_discord_dm(embed: discord.Embed):
+async def send_discord_dm(embed: discord.Embed, stroke_png: bytes | None = None):
     intents = discord.Intents.default()
     client = discord.Client(intents=intents)
 
@@ -157,7 +244,13 @@ async def send_discord_dm(embed: discord.Embed):
     async def on_ready():
         try:
             user = await client.fetch_user(int(DISCORD_DM_USER_ID))
-            await user.send(embed=embed)
+            kwargs = {"embed": embed}
+            if stroke_png:
+                kwargs["file"] = discord.File(
+                    io.BytesIO(stroke_png),
+                    filename=STROKE_ATTACHMENT_NAME,
+                )
+            await user.send(**kwargs)
             print(f"DM sent to user {DISCORD_DM_USER_ID}")
         except discord.Forbidden:
             print("ERROR: Bot cannot DM this user. Make sure DMs are enabled.")
@@ -203,16 +296,19 @@ def main():
     if char_data is None:
         return
 
-    embed = build_embed(char_data, slot, is_review)
+    stroke_png = render_stroke_order_png(char_data["char"])
+    embed = build_embed(char_data, slot, is_review,
+                        has_stroke_image=stroke_png is not None)
 
     # Print summary to console
     safe = lambda s: s.encode(sys.stdout.encoding or "utf-8", errors="replace") \
                       .decode(sys.stdout.encoding or "utf-8", errors="replace")
     print("=" * 42)
     print(safe(f"{char_data['char']} — {char_data['pinyin']} — {char_data['meaning']}"))
+    print(f"stroke image: {'yes (' + str(len(stroke_png)) + ' bytes)' if stroke_png else 'no'}")
     print("=" * 42)
 
-    asyncio.run(send_discord_dm(embed))
+    asyncio.run(send_discord_dm(embed, stroke_png))
 
 
 if __name__ == "__main__":
