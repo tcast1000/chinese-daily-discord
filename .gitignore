@@ -1,3 +1,11 @@
 .env
 __pycache__/
 *.pyc
+.pytest_cache/
+practice_scores.db
+*.db-wal
+*.db-shm
+tests/fixtures/audio/
+.keepalive
+venv/
+.venv/
